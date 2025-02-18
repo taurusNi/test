@@ -1,0 +1,189 @@
+name: Build OpenWrt
+
+permissions:
+  actions: write
+  contents: write
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'OpenWrt Version'
+        required: true
+        type: string
+
+env:
+  REPO_URL: https://git.openwrt.org/openwrt/openwrt.git
+  REPO_BRANCH: master
+  BUILD_ROOT: ${{ github.workspace }}/openwrt
+  DEPENDENCIES: ${{ github.workspace }}/dependencies-ubuntu.txt
+  CUSTOM_FEEDS_SH: ${{ github.workspace }}/custom-feeds.sh
+  CUSTOM_PACKAGES_SH: ${{ github.workspace }}/custom-packages.sh
+  CUSTOM_CONFIG_SH: ${{ github.workspace }}/custom-config.sh
+  TZ: Asia/Shanghai
+  DEVICE_NAME: unknown
+  FILE_DATE: unknown
+  FIRMWARE: unknown
+  # TODO
+  # UPLOAD_RELEASE: true
+
+jobs:
+  build:
+    runs-on: ${{ matrix.OS }}
+
+    strategy:
+      matrix:
+        ARCHITECTURE:
+          - x86
+        OS:
+          - ubuntu-24.04
+      fail-fast: false
+
+    steps:
+    - name: Check Agent Configuration
+      run: |
+        echo "------------------------------- Agent Information -------------------------------"
+        echo ">>>>>> Physical CPU Count <<<<<<"
+        cat /proc/cpuinfo| grep "physical id"| sort| uniq| wc -l
+        echo ">>>>>> CPU Core and Version Info <<<<<<"
+        cat /proc/cpuinfo | grep name | cut -f2 -d: | sed 's/^[ \t]*//;s/[ \t]*$//' | uniq
+        echo ">>>>>> Installed Memory Details <<<<<<"
+        sudo lshw -short -C memory | grep GiB
+        echo ">>>>>> Disk Count <<<<<<"
+        ls /dev/sd* | grep -v [1-9] | wc -l
+        echo ">>>>>> Disk Details <<<<<<"
+        df -Th
+        echo "------------------------------- Agent Information -------------------------------"
+
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt-get -qq update && sudo apt-get -qq upgrade
+        sudo apt-get -qq install $(cat $DEPENDENCIES)
+        sudo apt-get -qq autoremove --purge
+        sudo apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+
+    - name: Maximize build disk space
+      uses: easimon/maximize-build-space@master
+      with:
+        remove-dotnet: true
+        remove-android: true
+        remove-haskell: true
+        remove-codeql: true
+        remove-docker-images: true
+
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Download the sources
+      run: git clone --branch $REPO_BRANCH $REPO_URL
+
+    - name: Auto select a specific code revision
+      id: autoselect
+      if: github.event.client_payload.version == 'stable'
+      run: |
+        cd $BUILD_ROOT && git checkout $(git tag --sort=-creatordate | head -n1)
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Manual select a specific code revision
+      id: manualselect
+      if: github.event.inputs.version != null
+      run: |
+        cd $BUILD_ROOT && git checkout ${{ github.event.inputs.version }}
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Load custom
+      run: |
+        chmod +x custom-*.sh
+        $CUSTOM_FEEDS_SH
+        $BUILD_ROOT/scripts/feeds update -a && $BUILD_ROOT/scripts/feeds install -a
+        $CUSTOM_PACKAGES_SH
+        $CUSTOM_CONFIG_SH
+
+    - name: Build the firmware image
+      id: compile
+      run: |
+        cd $BUILD_ROOT && echo "$(($(nproc)+1)) thread compile"
+        IGNORE_ERRORS=m make -j$(($(nproc)+1)) defconfig download clean world || IGNORE_ERRORS=m make -j1 defconfig download clean world V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Check space usage
+      run: df -hT
+
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success'
+      with:
+        name: OpenWrt_bin_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        path: ${{ env.BUILD_ROOT }}/bin
+
+    - name: Organize files
+      id: organize
+      run: |
+        cd $BUILD_ROOT/bin/targets/*/* && rm -rf packages
+        { echo '### SHA256SUMS'; echo '```txt'; cat sha256sums; echo '```'; } > $BUILD_ROOT/SHA256SUMS
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success'
+      with:
+        name: OpenWrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+
+    - name: Generate stable Release Tag
+      id: stabletag
+      if: steps.autoselect.outputs.status == 'success' || steps.manualselect.outputs.status == 'success'
+      run: |
+        echo "release_tag=$(cd $BUILD_ROOT && git describe --tags --abbrev=0 --exact-match)_$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Generate snapshot Release Tag
+      id: snapshottag 
+      if: github.event.inputs.version == 'snapshot'
+      run: |
+        echo "release_tag=SNAPSHOT_$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload stable firmware to Release
+      uses: softprops/action-gh-release@master
+      if: steps.stabletag.outputs.status == 'success'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.stabletag.outputs.release_tag }}
+        files: ${{ env.FIRMWARE }}/*
+        body_path: ${{ env.BUILD_ROOT }}/SHA256SUMS
+
+    - name: Upload snapshot firmware to Release
+      uses: softprops/action-gh-release@master
+      if: steps.snapshottag.outputs.status == 'success'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.snapshottag.outputs.release_tag }}
+        files: ${{ env.FIRMWARE }}/*
+        body_path: ${{ env.BUILD_ROOT }}/SHA256SUMS
+
+    - name: Delete workflow runs
+      if: always()
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        retain_days: 30
+        keep_minimum_runs: 5
+
+    - name: Remove old Releases
+      if: always()
+      uses: dev-drprasad/delete-older-releases@master
+      with:
+        keep_latest: 5
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
