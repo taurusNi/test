@@ -18,8 +18,6 @@ env:
   REPO_BRANCH: master
   BUILD_ROOT: ${{ github.workspace }}/openwrt
   DEPENDENCIES: ${{ github.workspace }}/dependencies-ubuntu.txt
-  CUSTOM_FEEDS_SH: ${{ github.workspace }}/${{ matrix.target }}/custom-feeds.sh
-  CUSTOM_CONFIG_FILE: ${{ github.workspace }}/${{ matrix.target }}/.config
   TZ: Asia/Shanghai
   DEVICE_NAME: unknown
   FILE_DATE: unknown
@@ -95,9 +93,8 @@ jobs:
 
     - name: Load custom
       run: |
-        cp $CUSTOM_CONFIG_FILE $BUILD_ROOT
-        chmod +x $CUSTOM_FEEDS_SH
-        $CUSTOM_FEEDS_SH
+        cp ${{ github.workspace }}/${{ matrix.target }}/.config $BUILD_ROOT
+        bash ${{ github.workspace }}/${{ matrix.target }}/custom-feeds.sh
         $BUILD_ROOT/scripts/feeds update -a && $BUILD_ROOT/scripts/feeds install -a
 
     - name: Build the firmware image
