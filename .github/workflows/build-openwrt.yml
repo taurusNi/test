@@ -18,25 +18,23 @@ env:
   REPO_BRANCH: master
   BUILD_ROOT: ${{ github.workspace }}/openwrt
   DEPENDENCIES: ${{ github.workspace }}/dependencies-ubuntu.txt
-  CUSTOM_FEEDS_SH: ${{ github.workspace }}/custom-feeds.sh
-  CUSTOM_PACKAGES_SH: ${{ github.workspace }}/custom-packages.sh
-  CUSTOM_CONFIG_SH: ${{ github.workspace }}/custom-config.sh
+  CUSTOM_FEEDS_SH: ${{ github.workspace }}/${{ matrix.target }}/custom-feeds.sh
+  CUSTOM_CONFIG_FILE: ${{ github.workspace }}/${{ matrix.target }}/.config
   TZ: Asia/Shanghai
   DEVICE_NAME: unknown
   FILE_DATE: unknown
   FIRMWARE: unknown
-  # TODO
-  # UPLOAD_RELEASE: true
 
 jobs:
   build:
-    runs-on: ${{ matrix.OS }}
+    runs-on: ${{ matrix.os }}
 
+    name: Build ${{ matrix.target }}
     strategy:
       matrix:
-        ARCHITECTURE:
-          - x86
-        OS:
+        target:
+          - x86_64
+        os:
           - ubuntu-24.04
       fail-fast: false
 
@@ -97,11 +95,10 @@ jobs:
 
     - name: Load custom
       run: |
-        chmod +x custom-*.sh
+        cp $CUSTOM_CONFIG_FILE $BUILD_ROOT
+        chmod +x $CUSTOM_FEEDS_SH
         $CUSTOM_FEEDS_SH
         $BUILD_ROOT/scripts/feeds update -a && $BUILD_ROOT/scripts/feeds install -a
-        $CUSTOM_PACKAGES_SH
-        $CUSTOM_CONFIG_SH
 
     - name: Build the firmware image
       id: compile
