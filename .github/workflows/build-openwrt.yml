@@ -97,6 +97,11 @@ jobs:
         bash ${{ github.workspace }}/${{ matrix.target }}/custom-feeds.sh
         $BUILD_ROOT/scripts/feeds update -a && $BUILD_ROOT/scripts/feeds install -a
 
+        git clone --depth 1 --branch master https://github.com/jerrykuku/luci-theme-argon.git
+        mv luci-theme-argon $BUILD_ROOT/package
+        git clone --depth 1 --branch master https://github.com/jerrykuku/luci-app-argon-config.git
+        mv luci-app-argon-config $BUILD_ROOT/package
+
     - name: Build the firmware image
       id: compile
       run: |
