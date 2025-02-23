@@ -1,0 +1,66 @@
+name: OpenWrt Image Builder
+
+permissions:
+  actions: write
+  contents: write
+
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    name: Build ${{ matrix.target }}
+    strategy:
+      matrix:
+        target:
+          - x86_64
+        os:
+          - ubuntu-24.04
+      fail-fast: false
+
+    steps:
+    - name: Check Agent Configuration
+      run: |
+        echo "------------------------------- Agent Information -------------------------------"
+        echo ">>>>>> Physical CPU Count <<<<<<"
+        cat /proc/cpuinfo| grep "physical id"| sort| uniq| wc -l
+        echo ">>>>>> CPU Core and Version Info <<<<<<"
+        cat /proc/cpuinfo | grep name | cut -f2 -d: | sed 's/^[ \t]*//;s/[ \t]*$//' | uniq
+        echo ">>>>>> Installed Memory Details <<<<<<"
+        sudo lshw -short -C memory | grep GiB
+        echo ">>>>>> Disk Count <<<<<<"
+        ls /dev/sd* | grep -v [1-9] | wc -l
+        echo ">>>>>> Disk Details <<<<<<"
+        df -Th
+        echo "------------------------------- Agent Information -------------------------------"
+    
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Prepare
+      run: |
+        mkdir -p temp/bin
+        chmod 777 -R temp
+        cp x86_64/build.sh temp/
+        chmod +x temp/build.sh
+
+    - name: Compile
+      id: compile
+      run: |
+        docker run --rm \
+          -v ./temp/bin:/builder/bin \
+          -v ./temp/build.sh:/builder/build.sh \
+          openwrt/imagebuilder:x86-64-24.10.0 /builder/build.sh
+        echo "status=success" >> $GITHUB_OUTPUT          
+
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success'
+      with:
+        name: OpenWrt_bin
+        path: ./temp/bin
