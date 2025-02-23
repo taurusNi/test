@@ -44,8 +44,8 @@ jobs:
 
     - name: Prepare
       run: |
-        mkdir -p temp/bin
-        chmod 777 -R temp
+        mkdir -p ./temp/bin
+        chmod 777 -R ./temp
         cp x86_64/build.sh temp/
         chmod +x temp/build.sh
 
@@ -64,3 +64,16 @@ jobs:
       with:
         name: OpenWrt_bin
         path: ./temp/bin
+    
+    - name: Get timestamp
+      id: timestamp
+      run: echo "timestamp=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
+
+    - name: Upload stable firmware to Release
+      uses: softprops/action-gh-release@master
+      if: steps.compile.outputs.status == 'success'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: "x86_64_${{ steps.timestamp.outputs.timestamp }}"
+        files: ./temp/bin/targets/x86/64/*
